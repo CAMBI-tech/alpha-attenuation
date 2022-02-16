@@ -1,0 +1,8 @@
+data*
+results*
+results_baseline*
+venv*
+*.vscode
+
+*.pyc
+*__pycache__

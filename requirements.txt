@@ -1,0 +1,7 @@
+bcipy @ git+https://github.com/CAMBI-tech/BciPy@wavelet-model-integration
+loguru==0.6.0
+numpy
+pyriemann==0.2.7
+PyWavelets==1.2.0
+rich==11.2.0
+scikit-learn

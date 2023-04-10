@@ -8,11 +8,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pywt
 from bcipy.helpers.load import load_json_parameters, load_raw_data
-from bcipy.helpers.triggers import trigger_decoder
-from bcipy.signal.model.pca_rda_kde import PcaRdaKdeModel
-from bcipy.signal.process import get_default_transform
+from bcipy.helpers.triggers import trigger_decoder, TriggerType
+
+from bcipy.signal.process import get_default_transform, filter_inquiries
 from loguru import logger
 from preprocessing import AlphaTransformer
+from base_model import BasePcaRdaKdeModel
 from pyriemann.classification import TSclassifier
 from pyriemann.estimation import Covariances
 from rich.console import Console
@@ -26,6 +27,9 @@ from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.svm import SVC
 from sklearn.utils._testing import ignore_warnings
+
+from bcipy.helpers.acquisition import analysis_channels
+from bcipy.config import DEFAULT_PARAMETERS_PATH, TRIGGER_FILENAME, RAW_DATA_FILENAME, STATIC_AUDIO_PATH
 
 
 def cwt(data: np.ndarray, freq: int, fs: int) -> np.ndarray:
@@ -59,7 +63,7 @@ def cwt(data: np.ndarray, freq: int, fs: int) -> np.ndarray:
     return final_data.reshape(final_data.shape[0], -1, final_data.shape[-1])
 
 
-def load_data(data_folder: Path, trial_length=2.5, pre_stim_offset=-1.25):
+def load_data(data_folder: Path, trial_length=None, pre_stim=0.0):
     """Loads raw data, and performs preprocessing by notch filtering, bandpass filtering, and downsampling.
 
     Args:
@@ -72,61 +76,87 @@ def load_data(data_folder: Path, trial_length=2.5, pre_stim_offset=-1.25):
         np.ndarray: labels, shape (trials,)
         int: sampling rate (Hz)
     """
-    parameters = load_json_parameters(data_folder / "parameters.json", value_cast=True)
-
-    # extract relevant session information from parameters file
-    triggers_file = parameters.get("trigger_file_name", "triggers.txt")
-    raw_data_file = parameters.get("raw_data_name", "raw_data.csv")
+    # Load parameters
+    parameters = load_json_parameters(Path(data_folder, "parameters.json"), value_cast=True)
+    poststim_length = trial_length if trial_length != None else parameters.get("trial_length")
+    # pre_stim = parameters.get("prestim_length")
+    trials_per_inquiry = parameters.get("stim_length")
+    # The task buffer length defines the min time between two inquiries
+    # We use half of that time here to buffer during transforms
+    buffer = int(parameters.get("task_buffer_length") / 2)
+    raw_data_file = f"{RAW_DATA_FILENAME}.csv"
 
     # get signal filtering information
-    downsample_rate = parameters.get("down_sampling_rate")  # default 2
-    notch_filter = parameters.get("notch_filter_frequency")  # default 60
-    hp_filter = parameters.get("filter_high")  # default 45
-    lp_filter = parameters.get("filter_low")  # default 2
-    filter_order = parameters.get("filter_order")  # default 2
+    downsample_rate = parameters.get("down_sampling_rate")
+    notch_filter = parameters.get("notch_filter_frequency")
+    filter_high = parameters.get("filter_high")
+    filter_low = parameters.get("filter_low")
+    filter_order = parameters.get("filter_order")
+    static_offset = parameters.get("static_trigger_offset")
 
-    # get offset and k folds
-    static_offset = parameters.get("static_trigger_offset")  # default 0.1
+    logger.info(
+        f"\nData processing settings: \n"
+        f"Filter: [{filter_low}-{filter_high}], Order: {filter_order},"
+        f" Notch: {notch_filter}, Downsample: {downsample_rate} \n"
+        f"Poststimulus: {poststim_length}s, Prestimulus: {pre_stim}s, Buffer: {buffer}s \n"
+        f"Static offset: {static_offset}"
+    )
 
     # Load raw data
     raw_data = load_raw_data(Path(data_folder, raw_data_file))
     channels = raw_data.channels
     type_amp = raw_data.daq_type
-    fs = raw_data.sample_rate
+    sample_rate = raw_data.sample_rate
 
-    logger.info(f"Channels read from csv: {channels}")
-    logger.info(f"Device type: {type_amp}")
-
+    # setup filtering
     default_transform = get_default_transform(
-        sample_rate_hz=fs,
+        sample_rate_hz=sample_rate,
         notch_freq_hz=notch_filter,
-        bandpass_low=lp_filter,
-        bandpass_high=hp_filter,
+        bandpass_low=filter_low,
+        bandpass_high=filter_high,
         bandpass_order=filter_order,
         downsample_factor=downsample_rate,
     )
-    data, fs = default_transform(raw_data.by_channel(), fs)
 
-    # Process triggers.txt
-    _, t_t_i, t_i, offset = trigger_decoder(mode="calibration", trigger_path=f"{data_folder}/{triggers_file}")
+    logger.info(f"Channels read from csv: {channels}")
+    logger.info(f"Device type: {type_amp}, fs={sample_rate}")
 
-    offset = offset + static_offset + pre_stim_offset
+    k_folds = parameters.get("k_folds")
+    model = BasePcaRdaKdeModel(k_folds=k_folds)
 
-    # Channel map can be checked from raw_data.csv file.
-    # The timestamp column is already excluded.
-    # channel_names = ["P4", "Fz", "Pz", "F7", "PO8", "PO7", "Oz"]
-    channel_map = [0, 0, 1, 0, 1, 1, 1, 0]
-    data, labels = PcaRdaKdeModel.reshaper(
-        trial_labels=t_t_i,
-        timing_info=t_i,
-        eeg_data=data,
-        fs=fs,
-        trials_per_inquiry=parameters.get("stim_length"),
-        offset=offset,
-        channel_map=channel_map,
-        trial_length=trial_length,
+    # Process triggers.txt files
+    trigger_targetness, trigger_timing, trigger_symbols = trigger_decoder(
+        offset=static_offset,
+        trigger_path=f"{data_folder}/{TRIGGER_FILENAME}",
+        exclusion=[TriggerType.PREVIEW, TriggerType.EVENT, TriggerType.FIXATION],
     )
-    return data.transpose([1, 0, 2]), labels, fs
+    # Channel map can be checked from raw_data.csv file or the devices.json located in the acquisition module
+    # The timestamp column [0] is already excluded.
+    channel_map = analysis_channels(channels, type_amp)
+    data, fs = raw_data.by_channel()
+
+    inquiries, inquiry_labels, inquiry_timing = model.reshaper(
+        trial_targetness_label=trigger_targetness,
+        timing_info=trigger_timing,
+        eeg_data=data,
+        sample_rate=sample_rate,
+        trials_per_inquiry=trials_per_inquiry,
+        channel_map=channel_map,
+        poststimulus_length=poststim_length,
+        prestimulus_length=pre_stim,
+        transformation_buffer=buffer,
+    )
+
+    inquiries, fs = filter_inquiries(inquiries, default_transform, sample_rate)
+    trial_duration_samples = int(poststim_length * fs)
+    data = model.reshaper.extract_trials(
+        inquiries, trial_duration_samples, inquiry_timing, downsample_rate, pre_stimulus_length=pre_stim)
+
+    # define the training classes using integers, where 0=nontargets/1=targets
+    labels = inquiry_labels.flatten()
+    # breakpoint()
+    data = np.transpose(data, (1, 0, 2))
+    return data, labels, fs
 
 
 def fit(data: np.ndarray, labels: np.ndarray, n_folds: int, flatten_data: bool, clf: Any) -> Dict[str, str]:
@@ -216,12 +246,15 @@ def flatten(data):
 
 
 @ignore_warnings(category=ConvergenceWarning)
-def main(input_path: Path, output_path: Path, hparam_tuning: bool, z_score_per_trial: bool):
-    data, labels, fs = load_data(input_path)
+def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: bool, output_path: Optional[Path] = None):
+    data, labels, fs = load_data(input_path, trial_length=2.5, pre_stim=1)
+
+    # set output path to input path if not specified
+    output_path = output_path or input_path
 
     # CWT preprocess
     make_plots(data, labels, output_path / "0.raw_data.png")
-    data = cwt(data, args.freq, fs)
+    data = cwt(data, freq, fs)
     make_plots(data, labels, output_path / "1.cwt_data.png")
     logger.info(data.shape)
 
@@ -353,8 +386,9 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser()
+    # trial length in seconds for alpha band: 1.25s before and 1.25s after response
     p.add_argument("--input", type=Path, help="Path to data folder", required=True)
-    p.add_argument("--output", type=Path, help="Path to save outputs", required=True)
+    p.add_argument("--output", type=Path, help="Path to save outputs", required=False, default=None)
     p.add_argument("--freq", type=float, help="Frequency to keep after CWT", default=10)
     group = p.add_mutually_exclusive_group()
     group.add_argument(
@@ -366,9 +400,9 @@ if __name__ == "__main__":
     if not args.input.exists():
         raise ValueError("data path does not exist")
 
-    args.output.mkdir(exist_ok=True, parents=True)
+    # args.output.mkdir(exist_ok=True, parents=True)
 
     logger.info(f"Input data folder: {str(args.input)}")
     logger.info(f"Selected freq: {str(args.freq)}")
     with logger.catch(onerror=lambda _: sys.exit(1)):
-        main(args.input, args.output, args.hparam_tuning, args.z_score_per_trial)
+        main(args.input, args.freq, args.hparam_tuning, args.z_score_per_trial, output_path=args.output)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from alpha_experiment import load_data
-from bcipy.signal.model.pca_rda_kde import PcaRdaKdeModel
+from base_model import BasePcaRdaKdeModel
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
@@ -21,9 +21,9 @@ def reorder(data):
 
 def main(input_path, output_path):
     # extract relevant session information from parameters file
-    data, labels, _ = load_data(input_path, trial_length=0.5, pre_stim_offset=0)
+    data, labels, _ = load_data(input_path)
 
-    model = make_pipeline(FunctionTransformer(reorder), PcaRdaKdeModel(k_folds=10))
+    model = make_pipeline(FunctionTransformer(reorder), BasePcaRdaKdeModel(k_folds=10))
 
     n_folds = 10
     np.random.seed(1)
@@ -78,12 +78,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    # parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not args.input.exists():
         raise ValueError("data path does not exist")
-    args.output.mkdir(exist_ok=True, parents=True)
+    # args.output.mkdir(exist_ok=True, parents=True)
 
     logger.info(f"Input data folder: {str(args.input)}")
     with logger.catch(onerror=lambda _: sys.exit(1)):
-        main(args.input, args.output)
+        main(args.input, args.input)

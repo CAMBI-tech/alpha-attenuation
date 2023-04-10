@@ -1,4 +1,4 @@
-bcipy @ git+https://github.com/CAMBI-tech/BciPy@wavelet-model-integration
+bcipy
 loguru==0.6.0
 numpy
 pyriemann==0.2.7

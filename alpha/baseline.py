@@ -4,7 +4,7 @@ from itertools import cycle
 from pathlib import Path
 
 import numpy as np
-from alpha_experiment import load_data
+from alpha_experiment import load_data, load_experimental_data
 from base_model import BasePcaRdaKdeModel
 from loguru import logger
 from rich.console import Console
@@ -21,7 +21,7 @@ def reorder(data):
 
 def main(input_path, output_path):
     # extract relevant session information from parameters file
-    data, labels, _ = load_data(input_path)
+    data, labels, _ = load_data(input_path, alpha=False)
 
     model = make_pipeline(FunctionTransformer(reorder), BasePcaRdaKdeModel(k_folds=10))
 
@@ -77,13 +77,18 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--input", type=Path, required=False, default=None)
     # parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not args.input.exists():
+
+    if args.input is None:
+        folder_path = Path(load_experimental_data())
+    else:
+        folder_path = args.input
+
+    if not folder_path.exists():
         raise ValueError("data path does not exist")
-    # args.output.mkdir(exist_ok=True, parents=True)
 
     logger.info(f"Input data folder: {str(args.input)}")
     with logger.catch(onerror=lambda _: sys.exit(1)):
-        main(args.input, args.input)
+        main(folder_path, folder_path)

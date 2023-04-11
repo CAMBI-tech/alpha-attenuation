@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pywt
-from bcipy.helpers.load import load_json_parameters, load_raw_data
+from bcipy.helpers.load import load_json_parameters, load_raw_data, load_experimental_data
 from bcipy.helpers.triggers import trigger_decoder, TriggerType
 
 from bcipy.signal.process import get_default_transform, filter_inquiries
@@ -63,7 +63,7 @@ def cwt(data: np.ndarray, freq: int, fs: int) -> np.ndarray:
     return final_data.reshape(final_data.shape[0], -1, final_data.shape[-1])
 
 
-def load_data(data_folder: Path, trial_length=None, pre_stim=None):
+def load_data(data_folder: Path, trial_length=None, pre_stim=0.0, alpha=False):
     """Loads raw data, and performs preprocessing by notch filtering, bandpass filtering, and downsampling.
 
     Args:
@@ -79,7 +79,7 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=None):
     # Load parameters
     parameters = load_json_parameters(Path(data_folder, "parameters.json"), value_cast=True)
     poststim_length = trial_length if trial_length is not None else parameters.get("trial_length")
-    pre_stim = 0.0 if pre_stim is None else parameters.get("prestim_length")
+    pre_stim = pre_stim if pre_stim > 0.0 else parameters.get("prestim_length")
 
     trials_per_inquiry = parameters.get("stim_length")
     # The task buffer length defines the min time between two inquiries
@@ -144,13 +144,16 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=None):
         trials_per_inquiry=trials_per_inquiry,
         channel_map=channel_map,
         poststimulus_length=poststim_length,
-        prestimulus_length=pre_stim,
+        prestimulus_length=buffer + pre_stim,
         transformation_buffer=buffer + poststim_length,
     )
 
     inquiries, fs = filter_inquiries(inquiries, default_transform, sample_rate)
     trial_duration_samples = int(poststim_length * fs)
-    pre_stim_duration_samples = int(pre_stim * fs)
+    if alpha:
+        pre_stim_duration_samples = int(pre_stim * fs)
+    else:
+        pre_stim_duration_samples = 0
     data = model.reshaper.extract_trials(
         inquiries, trial_duration_samples, inquiry_timing, downsample_rate, prestimulus_samples=pre_stim_duration_samples)
 
@@ -249,7 +252,7 @@ def flatten(data):
 
 @ignore_warnings(category=ConvergenceWarning)
 def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: bool, output_path: Optional[Path] = None):
-    data, labels, fs = load_data(input_path, trial_length=1.25, pre_stim=1.25)
+    data, labels, fs = load_data(input_path, trial_length=1.25, pre_stim=1.25, alpha=True)
 
     # set output path to input path if not specified
     output_path = output_path or input_path
@@ -389,9 +392,9 @@ if __name__ == "__main__":
 
     p = argparse.ArgumentParser()
     # trial length in seconds for alpha band: 1.25s before and 1.25s after response; z-scored per trial is False and hparam tuning is True/False (make sure both work)
-    p.add_argument("--input", type=Path, help="Path to data folder", required=True)
+    p.add_argument("--input", type=Path, help="Path to data folder", required=False, default=None)
     p.add_argument("--output", type=Path, help="Path to save outputs", required=False, default=None)
-    p.add_argument("--freq", type=float, help="Frequency to keep after CWT", default=10)
+    p.add_argument("--freq", type=float, help="Frequency to keep after CWT", required=True)
     group = p.add_mutually_exclusive_group()
     group.add_argument(
         "--z_score_per_trial", action="store_true", default=False, help="baseline per channel, or per channel per trial"
@@ -399,12 +402,16 @@ if __name__ == "__main__":
     group.add_argument("--hparam_tuning", action="store_true", default=False)
     args = p.parse_args()
 
-    if not args.input.exists():
-        raise ValueError("data path does not exist")
+    if args.input is None:
+        folder_path = Path(load_experimental_data())
+    else:
+        folder_path = args.input
 
-    # args.output.mkdir(exist_ok=True, parents=True)
+
+    if not folder_path.exists():
+        raise ValueError("data path does not exist")
 
     logger.info(f"Input data folder: {str(args.input)}")
     logger.info(f"Selected freq: {str(args.freq)}")
     with logger.catch(onerror=lambda _: sys.exit(1)):
-        main(args.input, args.freq, args.hparam_tuning, args.z_score_per_trial, output_path=args.output)
+        main(folder_path, args.freq, args.hparam_tuning, args.z_score_per_trial, output_path=args.output)

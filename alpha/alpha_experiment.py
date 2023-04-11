@@ -144,13 +144,14 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0):
         channel_map=channel_map,
         poststimulus_length=poststim_length,
         prestimulus_length=pre_stim,
-        transformation_buffer=buffer,
+        transformation_buffer=buffer + trial_length,
     )
 
     inquiries, fs = filter_inquiries(inquiries, default_transform, sample_rate)
     trial_duration_samples = int(poststim_length * fs)
+    pre_stim_duration_samples = int(pre_stim * fs)
     data = model.reshaper.extract_trials(
-        inquiries, trial_duration_samples, inquiry_timing, downsample_rate, pre_stimulus_length=pre_stim)
+        inquiries, trial_duration_samples, inquiry_timing, downsample_rate, prestimulus_samples=pre_stim_duration_samples)
 
     # define the training classes using integers, where 0=nontargets/1=targets
     labels = inquiry_labels.flatten()
@@ -247,7 +248,7 @@ def flatten(data):
 
 @ignore_warnings(category=ConvergenceWarning)
 def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: bool, output_path: Optional[Path] = None):
-    data, labels, fs = load_data(input_path, trial_length=2.5, pre_stim=1)
+    data, labels, fs = load_data(input_path, trial_length=1.25, pre_stim=1.25)
 
     # set output path to input path if not specified
     output_path = output_path or input_path
@@ -386,7 +387,7 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser()
-    # trial length in seconds for alpha band: 1.25s before and 1.25s after response
+    # trial length in seconds for alpha band: 1.25s before and 1.25s after response; z-scored per trial is False and hparam tuning is True/False (make sure both work)
     p.add_argument("--input", type=Path, help="Path to data folder", required=True)
     p.add_argument("--output", type=Path, help="Path to save outputs", required=False, default=None)
     p.add_argument("--freq", type=float, help="Frequency to keep after CWT", default=10)

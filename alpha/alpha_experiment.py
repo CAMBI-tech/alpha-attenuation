@@ -63,7 +63,7 @@ def cwt(data: np.ndarray, freq: int, fs: int) -> np.ndarray:
     return final_data.reshape(final_data.shape[0], -1, final_data.shape[-1])
 
 
-def load_data(data_folder: Path, trial_length=None, pre_stim=0.0):
+def load_data(data_folder: Path, trial_length=None, pre_stim=None):
     """Loads raw data, and performs preprocessing by notch filtering, bandpass filtering, and downsampling.
 
     Args:
@@ -78,8 +78,9 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0):
     """
     # Load parameters
     parameters = load_json_parameters(Path(data_folder, "parameters.json"), value_cast=True)
-    poststim_length = trial_length if trial_length != None else parameters.get("trial_length")
-    # pre_stim = parameters.get("prestim_length")
+    poststim_length = trial_length if trial_length is not None else parameters.get("trial_length")
+    pre_stim = 0.0 if pre_stim is None else parameters.get("prestim_length")
+
     trials_per_inquiry = parameters.get("stim_length")
     # The task buffer length defines the min time between two inquiries
     # We use half of that time here to buffer during transforms
@@ -144,7 +145,7 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0):
         channel_map=channel_map,
         poststimulus_length=poststim_length,
         prestimulus_length=pre_stim,
-        transformation_buffer=buffer + trial_length,
+        transformation_buffer=buffer + poststim_length,
     )
 
     inquiries, fs = filter_inquiries(inquiries, default_transform, sample_rate)
@@ -349,7 +350,7 @@ def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: 
         report["name"] = model_name
         reports.append(report)
 
-    table = Table(title=f"Alpha Classifier Comparison ({n_folds}-fold cross validation)")
+    table = Table(title=f"Alpha Classifier Comparisons ({n_folds}-fold cross validation)")
     colors = cycle(["green", "blue"])
 
     col_names = [
@@ -371,7 +372,7 @@ def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: 
     for col_name, color in zip(col_names, colors):
         table.add_column(col_name[0], style=color, no_wrap=True)
 
-    with open(output_path / f"results.{n_folds=}.csv", "w") as csvfile:
+    with open(output_path / f"ALPHAresults.{n_folds=}.csv", "w") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=[c[1] for c in col_names])
         writer.writeheader()
         for report in reports:
@@ -380,7 +381,7 @@ def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: 
 
     console = Console(record=True, width=500)
     console.print(table)
-    console.save_html(output_path / f"results.{n_folds=}.html")
+    console.save_html(output_path / f"ALPHAresults.{n_folds=}.html")
 
 
 if __name__ == "__main__":

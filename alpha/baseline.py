@@ -57,20 +57,20 @@ def main(input_path, output_path):
     report = {k: str(round(v, 3)) for k, v in report.items()}
     report["Model Name"] = "PCA/RDA/KDE"
 
-    table = Table(title=f"Alpha Classifier Comparison ({n_folds}-fold cross validation)")
+    table = Table(title=f"Baseline Model ({n_folds}-fold cross validation)")
     colors = cycle(["green", "blue"])
     for col_name, color in zip(report.keys(), colors):
         table.add_column(col_name, style=color, no_wrap=True)
     table.add_row(*report.values())
 
-    with open(output_path / f"results.{n_folds=}.csv", "w") as csvfile:
+    with open(output_path / f"ERPresults.{n_folds=}.csv", "w") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=list(report.keys()))
         writer.writeheader()
         writer.writerow(report)
 
     console = Console(record=True, width=500)
     console.print(table)
-    console.save_html(output_path / f"results.{n_folds=}.html")
+    console.save_html(output_path / f"ERPresults.{n_folds=}.html")
 
 
 if __name__ == "__main__":

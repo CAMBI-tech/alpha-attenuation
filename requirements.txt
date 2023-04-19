@@ -1,7 +1,7 @@
-bcipy
+bcipy==2.0.0rc3
 loguru==0.6.0
 numpy
 pyriemann==0.2.7
-PyWavelets==1.2.0
+PyWavelets==1.4.1
 rich==11.2.0
 scikit-learn

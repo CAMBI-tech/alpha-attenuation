@@ -13,7 +13,7 @@ from bcipy.helpers.triggers import trigger_decoder, TriggerType
 from bcipy.signal.process import get_default_transform, filter_inquiries
 from loguru import logger
 from preprocessing import AlphaTransformer
-from base_model import BasePcaRdaKdeModel
+from base_model import BaseRdaKdeModel
 from pyriemann.classification import TSclassifier
 from pyriemann.estimation import Covariances
 from rich.console import Console
@@ -29,7 +29,11 @@ from sklearn.svm import SVC
 from sklearn.utils._testing import ignore_warnings
 
 from bcipy.helpers.acquisition import analysis_channels
-from bcipy.config import DEFAULT_PARAMETERS_PATH, TRIGGER_FILENAME, RAW_DATA_FILENAME, STATIC_AUDIO_PATH
+from bcipy.helpers.stimuli import update_inquiry_timing
+from bcipy.config import (TRIGGER_FILENAME,
+                          RAW_DATA_FILENAME,
+                          DEFAULT_DEVICE_SPEC_FILENAME)
+import bcipy.acquisition.devices as devices
 
 
 def cwt(data: np.ndarray, freq: int, fs: int) -> np.ndarray:
@@ -109,6 +113,9 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0, alpha=False):
     type_amp = raw_data.daq_type
     sample_rate = raw_data.sample_rate
 
+    devices.load(Path(data_folder, DEFAULT_DEVICE_SPEC_FILENAME))
+    device_spec = devices.preconfigured_device(raw_data.daq_type)
+
     # setup filtering
     default_transform = get_default_transform(
         sample_rate_hz=sample_rate,
@@ -123,7 +130,7 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0, alpha=False):
     logger.info(f"Device type: {type_amp}, fs={sample_rate}")
 
     k_folds = parameters.get("k_folds")
-    model = BasePcaRdaKdeModel(k_folds=k_folds)
+    model = BaseRdaKdeModel(k_folds=k_folds)
 
     # Process triggers.txt files
     trigger_targetness, trigger_timing, trigger_symbols = trigger_decoder(
@@ -133,7 +140,7 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0, alpha=False):
     )
     # Channel map can be checked from raw_data.csv file or the devices.json located in the acquisition module
     # The timestamp column [0] is already excluded.
-    channel_map = analysis_channels(channels, type_amp)
+    channel_map = analysis_channels(channels, device_spec)
     data, fs = raw_data.by_channel()
 
     inquiries, inquiry_labels, inquiry_timing = model.reshaper(
@@ -149,13 +156,14 @@ def load_data(data_folder: Path, trial_length=None, pre_stim=0.0, alpha=False):
     )
 
     inquiries, fs = filter_inquiries(inquiries, default_transform, sample_rate)
+    inquiry_timing = update_inquiry_timing(inquiry_timing, downsample_rate)
     trial_duration_samples = int(poststim_length * fs)
     if alpha:
         pre_stim_duration_samples = int(pre_stim * fs)
     else:
         pre_stim_duration_samples = 0
     data = model.reshaper.extract_trials(
-        inquiries, trial_duration_samples, inquiry_timing, downsample_rate, prestimulus_samples=pre_stim_duration_samples)
+        inquiries, trial_duration_samples, inquiry_timing, prestimulus_samples=pre_stim_duration_samples)
 
     # define the training classes using integers, where 0=nontargets/1=targets
     labels = inquiry_labels.flatten()
@@ -251,7 +259,8 @@ def flatten(data):
 
 
 @ignore_warnings(category=ConvergenceWarning)
-def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: bool, output_path: Optional[Path] = None):
+def main(input_path: Path, freq: float, hparam_tuning: bool,
+         z_score_per_trial: bool, output_path: Optional[Path] = None):
     data, labels, fs = load_data(input_path, trial_length=1.25, pre_stim=1.25, alpha=True)
 
     # set output path to input path if not specified
@@ -322,9 +331,9 @@ def main(input_path: Path, freq: float, hparam_tuning: bool, z_score_per_trial: 
     z_transformed_entire_data = z_scorer.transform(data, do_slice=False)
     # Copy of entire window for plotting
     logger.info(
-        f"{z_transformed_target_window.min()=}, "
-        + f"{z_transformed_target_window.mean()=}, "
-        + f"{z_transformed_target_window.max()=}"
+        f"{z_transformed_target_window.min()=}, " +
+        f"{z_transformed_target_window.mean()=}, " +
+        f"{z_transformed_target_window.max()=}"
     )
 
     make_plots(z_transformed_target_window, labels, output_path / "2.z_target_window.png")
@@ -391,7 +400,9 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser()
-    # trial length in seconds for alpha band: 1.25s before and 1.25s after response; z-scored per trial is False and hparam tuning is True/False (make sure both work)
+    # trial length in seconds for alpha band: 1.25s before and 1.25s after
+    # response; z-scored per trial is False and hparam tuning is True/False
+    # (make sure both work)
     p.add_argument("--input", type=Path, help="Path to data folder", required=False, default=None)
     p.add_argument("--output", type=Path, help="Path to save outputs", required=False, default=None)
     p.add_argument("--freq", type=float, help="Frequency to keep after CWT", required=True)
@@ -406,7 +417,6 @@ if __name__ == "__main__":
         folder_path = Path(load_experimental_data())
     else:
         folder_path = args.input
-
 
     if not folder_path.exists():
         raise ValueError("data path does not exist")

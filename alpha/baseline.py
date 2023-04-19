@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 from alpha_experiment import load_data, load_experimental_data
-from base_model import BasePcaRdaKdeModel
+from base_model import BasePcaRdaKdeModel, BaseRdaKdeModel
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
@@ -23,7 +23,7 @@ def main(input_path, output_path):
     # extract relevant session information from parameters file
     data, labels, _ = load_data(input_path, alpha=False)
 
-    model = make_pipeline(FunctionTransformer(reorder), BasePcaRdaKdeModel(k_folds=10))
+    model = make_pipeline(FunctionTransformer(reorder), BaseRdaKdeModel(k_folds=10))
 
     n_folds = 10
     np.random.seed(1)
